@@ -4,7 +4,7 @@ import traci # SUMO's Traffic Control Interface
 import numpy as np
 
 class SumoGridEnv(gym.Env):
-    def __init__(self, sumo_config="C:/Users/lucas/OneDrive/Documents/Coding/Traffic/network/fremont.sumocfg"):
+    def __init__(self, sumo_config="C:/Users/lucas/OneDrive/Documents/Coding/Traffic-Lights-RL/fremont/osm.sumocfg"):
         # Initialize SUMO
         self.sumoConfig = sumo_config
         self.sumoCmd = ["sumo", "-c", self.sumoConfig]
@@ -32,6 +32,13 @@ class SumoGridEnv(gym.Env):
                                             high=np.float32(np.inf), 
                                             shape=(total_observation_space_size,), 
                                             dtype=np.float32)
+        
+    def get_traffic_light_ids(self):
+        if not self.sumo_running:
+            traci.start(self.sumoCmd)
+            self.sumo_running = True
+            
+        return traci.trafficlight.getIDList()
         
     def calculate_reward(self, queue_lengths):
         """
