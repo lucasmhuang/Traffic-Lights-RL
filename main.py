@@ -1,10 +1,8 @@
 import gymnasium as gym
 import torch
 from stable_baselines3 import DDPG
-from stable_baselines3.common.noise import NormalActionNoise, OrnsteinUhlenbeckActionNoise
-from stable_baselines3.common.env_util import make_vec_env
 import numpy as np
-from model import Actor, Critic, ReplayBuffer, Agent
+from model import Actor, Critic, ReplayBuffer, Agent, OrnsteinUhlenbeckActionNoise
 
 # TO DO
 # 1) initialize global critic/actor network with random weights
@@ -17,27 +15,24 @@ from model import Actor, Critic, ReplayBuffer, Agent
 gym.register(
     id="SumoGrid-v0",
     entry_point="sumo_grid_env:SumoGridEnv",
-    kwargs={"sumo_config": "C:/Users/lucas/OneDrive/Documents/Coding/Traffic-Lights-RL/fremont/osm.sumocfg"} 
+    kwargs={"sumo_config": "C:/Users/lucas/Documents/Coding/Traffic-Lights-RL/fremont/osm.sumocfg"} 
 )
 
 # Create the environment
 env = gym.make("SumoGrid-v0")
 
-# Retrieve the list of traffic light IDs from TraCI
-traffic_light_ids = env.get_traffic_light_ids()
-
-state_size = 2 * len(traffic_light_ids)
-action_size = len(traffic_light_ids)
+state_size = len(env.unwrapped.traffic_light_ids) + len(env.unwrapped.lane_ids)
+action_size = len(env.unwrapped.traffic_light_ids)
 
 global_actor = Actor(state_size, action_size)
 global_critic = Critic(state_size, action_size)
 # Create local actors, critics, and replay buffers for each agent
 # # Initialize target networks with global network weights
 agents = []
-for tl_id in traffic_light_ids:
-    local_actor = Actor(state_size, action_size)
+for tl_id in env.unwrapped.traffic_light_ids:
+    local_actor = Actor(state_size)
     local_critic = Critic(state_size, action_size)
-    target_actor = Actor(state_size, action_size)
+    target_actor = Actor(state_size)
     target_critic = Critic(state_size, action_size)
     local_actor.load_state_dict(global_actor.state_dict())
     local_critic.load_state_dict(global_critic.state_dict())
@@ -65,22 +60,27 @@ def federated_averaging(models):
     return state_dict
 
 # Main federated learning loop
+mse_loss = torch.nn.MSELoss()
+n_actions = env.action_space.shape[0]
+ou_noises = [OrnsteinUhlenbeckActionNoise(mu=np.zeros(1), sigma=0.3) for _ in env.unwrapped.traffic_light_ids]
 num_iteration = 1000
 num_episode = 150
 for iteration in range(num_iteration):
-    state = env.reset()
+    state, _ = env.reset()
+    for noise in ou_noises:
+        noise.reset()
     rewards = []
     for episode in range(num_episode):
         # Parallel training of agents
         actions = []
         episode_reward = 0
-        for agent in agents:
-            actions.append(agent.get_action(state))
+        for i, agent in enumerate(agents):
+            actions.append(np.clip(agent.get_action(state)  + ou_noises[i](), env.action_space.low[i], env.action_space.high[i]))
         new_state, reward, done, truncated, _ = env.step(actions)
         episode_reward += reward
         print("Episode", episode, "reward: ", reward)
         for i, agent in enumerate(agents):
-            agent.replay_buffer.push(state, actions[i], reward, new_state, done)
+            agent.replay_buffer.add(state, actions[i], reward, new_state, done)
         if episode + 1 > 64:
             # Sample mini-batch of experiences
             # Update local critic network
@@ -89,27 +89,20 @@ for iteration in range(num_iteration):
             # Aggregate weights from local networks and update global ritic/actor/target networks
             for agent in agents:
                 states, actions, rewards, next_states, dones = agent.replay_buffer.sample()
-                # Convert to PyTorch tensors
-                states = torch.tensor(states, dtype=torch.float32)
-                actions = torch.tensor(actions, dtype=torch.float32)
-                rewards = torch.tensor(rewards, dtype=torch.float32)
-                next_states = torch.tensor(next_states, dtype=torch.float32)
-                dones = torch.tensor(dones, dtype=torch.float32)
-
                 # Update Critic
                 # Predict Q-values (Q_expected) using current states and actions
                 Q_expected = agent.critic(states, actions)
                 # Compute target Q-values (Q_targets) using next states and rewards
                 # Use target networks if available
                 Q_targets = rewards + 0.99 * agent.target_critic(next_states, agent.target_actor(next_states)) * (1 - dones)
-                critic_loss = torch.nn.mse_loss(Q_expected, Q_targets)
+                critic_loss = mse_loss(Q_expected, Q_targets)
                 agent.critic_optimizer.zero_grad()
                 critic_loss.backward()
                 agent.critic_optimizer.step()
 
                 # Update Actor
                 # Calculate actor loss
-                actor_loss = -agent.critic(states, agent.local_actor(states)).mean()
+                actor_loss = -agent.critic(states, agent.actor(states)).mean()
                 agent.actor_optimizer.zero_grad()
                 actor_loss.backward()
                 agent.actor_optimizer.step()
@@ -132,8 +125,8 @@ for iteration in range(num_iteration):
                 agent.target_actor.load_state_dict(global_actor_state_dict)
                 agent.target_critic.load_state_dict(global_critic_state_dict)
         state = new_state
-    rewards.append(episode_reward)
-print("Rewards:", rewards)
+        rewards.append(episode_reward)
+    print("Rewards:", rewards)
 
 # Define functions for training, weight aggregation, and soft updates
 # ...

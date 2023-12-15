@@ -7,12 +7,12 @@ import traci
 from collections import deque
 
 class Actor(nn.Module):
-    def __init__(self, state_size, action_size, seed=0, fc1_units=200, fc2_units=100):
+    def __init__(self, state_size, seed=0, fc1_units=200, fc2_units=100):
         super(Actor, self).__init__()
         self.seed = torch.manual_seed(seed)
         self.fc1 = nn.Linear(state_size, fc1_units)
         self.fc2 = nn.Linear(fc1_units, fc2_units)
-        self.fc3 = nn.Linear(fc2_units, action_size)
+        self.fc3 = nn.Linear(fc2_units, 1)
     
     def forward(self, state):
         x = F.relu(self.fc1(state))
@@ -23,13 +23,13 @@ class Critic(nn.Module):
     def __init__(self, state_size, action_size, seed=0, fcs1_units=200, fc2_units=100):
         super(Critic, self).__init__()
         self.seed = torch.manual_seed(seed)
-        self.fcs1 = nn.Linear(state_size, fcs1_units)
-        self.fc2 = nn.Linear(fcs1_units + action_size, fc2_units)
+        self.fc1 = nn.Linear(state_size + 1, fcs1_units)
+        self.fc2 = nn.Linear(fcs1_units, fc2_units)
         self.fc3 = nn.Linear(fc2_units, 1)
     
     def forward(self, state, action):
-        xs = F.relu(self.fcs1(state))
-        x = torch.cat((xs, action), dim=1)
+        x = torch.cat((state, action), dim=1)
+        x = F.relu(self.fc1(x))
         x = F.relu(self.fc2(x))
         return self.fc3(x)
 
@@ -61,6 +61,35 @@ class Agent:
         self.critic = critic
         self.replay_buffer = replay_buffer
         self.target_actor = target_actor
-        self.target_crtic = target_critic
+        self.target_critic = target_critic
         self.actor_optimizer = actor_optimizer
         self.critic_optimizer = critic_optimizer
+
+    def get_action(self, state):
+        # Convert state to PyTorch tensor
+        state = torch.tensor(state, dtype=torch.float32).unsqueeze(0)  # Add batch dimension
+        # Disable gradient calculations since we are in inference mode
+        with torch.no_grad():
+            # Get continuous action value from the local model (actor network)
+            continuous_action = self.actor(state).cpu().numpy().squeeze(0)
+        # Discretize the action for the environment: -1.0 to 0.0 becomes 0, and 0.0 to 1.0 becomes 1
+        discrete_action = np.round((continuous_action + 1.0) / 2.0).astype(int)
+        return discrete_action
+
+class OrnsteinUhlenbeckActionNoise:
+    def __init__(self, mu, sigma, theta=.15, dt=1e-2, x0=None):
+        self.theta = theta
+        self.mu = mu
+        self.sigma = sigma
+        self.dt = dt
+        self.x0 = x0
+        self.reset()
+
+    def reset(self):
+        self.x_prev = self.x0 if self.x0 is not None else np.zeros_like(self.mu)
+
+    def __call__(self):
+        x = self.x_prev + self.theta * (self.mu - self.x_prev) * self.dt + \
+            self.sigma * np.sqrt(self.dt) * np.random.normal(size=self.mu.shape)
+        self.x_prev = x
+        return x

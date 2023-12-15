@@ -4,7 +4,7 @@ import traci # SUMO's Traffic Control Interface
 import numpy as np
 
 class SumoGridEnv(gym.Env):
-    def __init__(self, sumo_config="C:/Users/lucas/OneDrive/Documents/Coding/Traffic-Lights-RL/fremont/osm.sumocfg"):
+    def __init__(self, sumo_config="C:/Users/lucas/Documents/Coding/Traffic-Lights-RL/fremont/osm.sumocfg"):
         # Initialize SUMO
         self.sumoConfig = sumo_config
         self.sumoCmd = ["sumo", "-c", self.sumoConfig]
@@ -48,11 +48,11 @@ class SumoGridEnv(gym.Env):
         :return: A float representing the calculated reward.
         """
         # Testing an inverse reward function
-        reward = -sum(1.0 / (1 + length) for length in queue_lengths)
-        # Penalty for each emergency stop
-        emergency_stop_penalty = -10
-        # Check for emergency stops
-        reward -= emergency_stop_penalty * traci.simulation.getEmergencyStoppingVehiclesNumber()
+        reward = -1.0 / (sum(queue_lengths) + 1)
+        # # Penalty for each emergency stop
+        # emergency_stop_penalty = -10
+        # # Check for emergency stops
+        # reward -= emergency_stop_penalty * traci.simulation.getEmergencyStoppingVehiclesNumber()
         return reward
     
     def check_if_done(self):
@@ -78,7 +78,8 @@ class SumoGridEnv(gym.Env):
         # Process the action for each traffic light
         for i, light_id in enumerate(self.traffic_light_ids):
             # Discretize the action value: round to convert to either 0 or 1
-            discrete_action = int(round(action[i]))
+            discrete_action = 1 if action[i][0] > 0.0 else 0
+            print(action[i], discrete_action)
             if discrete_action == 1:  # If the action is to change the phase
                 current_phase = traci.trafficlight.getPhase(light_id)
                 total_phases = len(traci.trafficlight.getAllProgramLogics(light_id)[0].getPhases())
@@ -89,7 +90,7 @@ class SumoGridEnv(gym.Env):
         traci.simulationStep()
 
         # Gather new state information
-        new_queue_lengths = [traci.lane.getLastStepHaltingNumber(lane) for lane in self.lane_ids]
+        new_queue_lengths = [sum(1 for car_id in traci.lane.getLastStepVehicleIDs(lane_id) if traci.vehicle.getSpeed(car_id) < 4) for lane_id in self.lane_ids]
         new_traffic_light_states = [traci.trafficlight.getPhase(light) for light in self.traffic_light_ids]
         # Combine queue lengths and traffic light states into the new observation
         observation = np.concatenate([
@@ -121,7 +122,7 @@ class SumoGridEnv(gym.Env):
         self.lane_ids = traci.lane.getIDList()
 
         # Generate the initial observation based on the current state of the simulation
-        initial_queue_lengths = [traci.lane.getLastStepHaltingNumber(lane) for lane in self.lane_ids]
+        initial_queue_lengths = [sum(1 for car_id in traci.lane.getLastStepVehicleIDs(lane_id) if traci.vehicle.getSpeed(car_id) < 4) for lane_id in self.lane_ids]
         initial_traffic_light_states = [traci.trafficlight.getPhase(light) for light in self.traffic_light_ids]   
         # Convert the observation components to a NumPy array and concatenate them
         observation = np.concatenate([
