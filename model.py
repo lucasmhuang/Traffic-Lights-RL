@@ -44,69 +44,23 @@ class ReplayBuffer:
         
     def sample(self):
         experiences = random.sample(self.memory, k=self.batch_size)
-        states = torch.from_numpy(np.vstack([e.state for e in experiences])).float()
-        actions = torch.from_numpy(np.vstack([e.action for e in experiences])).float()
-        rewards = torch.from_numpy(np.vstack([e.reward for e in experiences])).float()
-        next_states = torch.from_numpy(np.vstack([e.next_state for e in experiences])).float()
-        dones = torch.from_numpy(np.vstack([e.done for e in experiences]).astype(np.uint8)).float()
+        states = torch.from_numpy(np.vstack([e[0] for e in experiences])).float()
+        actions = torch.from_numpy(np.vstack([e[1] for e in experiences])).float()
+        rewards = torch.from_numpy(np.vstack([e[2] for e in experiences])).float()
+        next_states = torch.from_numpy(np.vstack([e[3] for e in experiences])).float()
+        dones = torch.from_numpy(np.vstack([e[4] for e in experiences]).astype(np.uint8)).float()
         return (states, actions, rewards, next_states, dones)
     
     def __len__(self):
         return len(self.memory)
 
 class Agent:
-    def __init__(self, traffic_light_id, actor, critic, replay_buffer):
+    def __init__(self, traffic_light_id, actor, critic, target_actor, target_critic, actor_optimizer, critic_optimizer, replay_buffer):
         self.traffic_light_id = traffic_light_id
         self.actor = actor
         self.critic = critic
         self.replay_buffer = replay_buffer
-    
-    def get_state(self):
-        # Get the state of the traffic light, e.g., queue length
-        queue_length = traci.lane.getLastStepVehicleNumber(traci.trafficlight.getControlledLanes(self.traffic_light_id))
-        return np.array([queue_length])
-
-    def get_reward(self):
-        # Define reward based on queue length and collision status
-        collision_count = traci.simulation.getCollidingVehiclesNumber()
-        queue_length = sum(traci.lane.getLastStepVehicleNumber(light) for light in traci.trafficlight.getControlledLanes(self.traffic_light_id))
-        # Reward function considering both queue length and collisions
-        reward = -queue_length
-        if collision_count > 0:
-            reward -= collision_count * -10  # large negative value
-        return reward
-    
-    def step(self, action):
-        # Execute the action (change traffic light phase)
-        # ...
-        # Collect the new state and reward after the action
-        new_state = self.get_state()
-        reward = self.get_reward()
-        # ...
-        return new_state, reward, done  # done to be determined by your environment's conditions
-
-def federated_averaging(agents_weights, agents_episodes):
-    """
-    Perform federated averaging of the weights.
-    
-    :param agents_weights: List of state_dicts (weights) of each agent's model
-    :param agents_episodes: List of episode counts for each agent
-    :return: A state_dict representing the averaged weights
-    """
-    # Initialize the numerator and denominator for weighted averaging
-    weighted_sum_weights = None
-    total_episodes = sum(agents_episodes)
-    
-    for agent_weights, episodes in zip(agents_weights, agents_episodes):
-        agent_weight = {k: v * episodes for k, v in agent_weights.items()}
-        
-        if weighted_sum_weights is None:
-            weighted_sum_weights = agent_weight
-        else:
-            # Sum the weighted weights
-            weighted_sum_weights = {k: weighted_sum_weights[k] + agent_weight.get(k, 0) for k in weighted_sum_weights}
-    
-    # Divide by the total number of episodes to get the average
-    averaged_weights = {k: v / total_episodes for k, v in weighted_sum_weights.items()}
-    
-    return averaged_weights
+        self.target_actor = target_actor
+        self.target_crtic = target_critic
+        self.actor_optimizer = actor_optimizer
+        self.critic_optimizer = critic_optimizer
