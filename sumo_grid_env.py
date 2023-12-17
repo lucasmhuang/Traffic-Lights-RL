@@ -33,13 +33,6 @@ class SumoGridEnv(gym.Env):
                                             shape=(total_observation_space_size,), 
                                             dtype=np.float32)
         
-    def get_traffic_light_ids(self):
-        if not self.sumo_running:
-            traci.start(self.sumoCmd)
-            self.sumo_running = True
-            
-        return traci.trafficlight.getIDList()
-        
     def calculate_reward(self, queue_lengths):
         """
         Calculate the reward, which is the negative sum of the number of cars waiting at all intersections.

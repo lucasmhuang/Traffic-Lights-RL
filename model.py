@@ -93,3 +93,18 @@ class OrnsteinUhlenbeckActionNoise:
             self.sigma * np.sqrt(self.dt) * np.random.normal(size=self.mu.shape)
         self.x_prev = x
         return x
+    
+def soft_update(local_model, target_model, tau=0.005):
+    for target_param, local_param in zip(target_model.parameters(), local_model.parameters()):
+        target_param.data.copy_(tau*local_param.data + (1.0-tau)*target_param.data)   
+ 
+def federated_averaging(models):
+    """
+    Average the weights of the models.
+    :param models: List of models (either actors or critics) from each agent.
+    :return: Averaged state_dict of the models.
+    """
+    state_dict = models[0].state_dict()
+    for key in state_dict:
+        state_dict[key] = torch.mean(torch.stack([model.state_dict()[key] for model in models]), dim=0)
+    return state_dict
