@@ -42,10 +42,10 @@ class SumoGridEnv(gym.Env):
         """
         # Testing an inverse reward function
         reward = -1.0 / (sum(queue_lengths) + 1)
-        # # Penalty for each emergency stop
-        # emergency_stop_penalty = -10
-        # # Check for emergency stops
-        # reward -= emergency_stop_penalty * traci.simulation.getEmergencyStoppingVehiclesNumber()
+        # Penalty for each emergency stop
+        emergency_stop_penalty = -10
+        # Check for emergency stops
+        reward += emergency_stop_penalty * traci.simulation.getEmergencyStoppingVehiclesNumber()
         return reward
     
     def check_if_done(self):
@@ -71,8 +71,11 @@ class SumoGridEnv(gym.Env):
         # Process the action for each traffic light
         for i, light_id in enumerate(self.traffic_light_ids):
             # Discretize the action value: round to convert to either 0 or 1
-            discrete_action = 1 if action[i][0] > 0.0 else 0
-            print(action[i], discrete_action)
+            discrete_action = 0
+            if type(action[i]) is list:
+                discrete_action = 1 if action[i][0] > 0.0 else 0
+            else:
+                discrete_action = 1 if action[i] > 0.0 else 0
             if discrete_action == 1:  # If the action is to change the phase
                 current_phase = traci.trafficlight.getPhase(light_id)
                 total_phases = len(traci.trafficlight.getAllProgramLogics(light_id)[0].getPhases())
