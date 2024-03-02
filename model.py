@@ -5,6 +5,9 @@ import numpy as np
 import random
 import traci
 from collections import deque
+from kafka import KafkaConsumer, KafkaProducer
+from kafka.admin import KafkaAdminClient, NewTopic
+import json
 
 class Actor(nn.Module):
     def __init__(self, state_size, seed=0, fc1_units=200, fc2_units=100):
@@ -108,3 +111,51 @@ def federated_averaging(models):
     for key in state_dict:
         state_dict[key] = torch.mean(torch.stack([model.state_dict()[key] for model in models]), dim=0)
     return state_dict
+    
+class KafkaFunctions:
+    def create_kafka_topic(self, topicName):
+        try:
+            admin_client = KafkaAdminClient( bootstrap_servers="localhost:9091", client_id='cl1')
+            topic_list = [NewTopic(name=topicName, num_partitions=1, replication_factor=1)]
+            admin_client.create_topics(new_topics=topic_list, validate_only=False)
+            print('Topic', topicName, 'created')
+        except Exception as e:
+            print('Exception', str(e), 'in creating topic', topicName)
+
+    def create_kafka_producer(self):
+        producer = None
+        try:
+            producer = KafkaProducer(
+                bootstrap_servers=['localhost:9091'],
+                api_version=(0, 10),
+                value_serializer=lambda v: json.dumps(v).encode('utf-8'),
+            )
+        except Exception as e:
+            print('Exception', str(e), 'in creating Kafka producer')
+        finally:
+            return producer
+
+    def create_kafka_consumer(self, topic):
+        consumer = None
+        try:
+            consumer = KafkaConsumer(topic,
+                api_version=(0, 11),
+                bootstrap_servers=['localhost:9091'],
+                auto_offset_reset='latest',
+                value_deserializer=lambda m: json.loads(m.decode('utf-8')),
+                enable_auto_commit=True
+            )
+        except Exception as e:
+            print('Exception', str(e), 'in creating Kafka consumer')
+        finally:
+            return consumer
+
+    def kafka_publish(self, topic, value, producer):
+        try:
+            producer.send(topic, value=value)
+        except Exception as e:
+            print('Exception', str(e), 'in publishing', topic)
+
+    def create_kafka_connection(self):
+        self.create_kafka_topic("sumo-traffic-data")
+        self.create_kafka_topic("edges")
