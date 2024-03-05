@@ -3,15 +3,18 @@ from gymnasium import spaces
 import traci # SUMO's Traffic Control Interface
 import numpy as np
 import time
-from kafka import KafkaConsumer, KafkaProducer
 from model import KafkaFunctions as kf
 
 class SumoGridEnv(gym.Env):
-    def __init__(self, sumo_config="C:/Users/lucas/Documents/Coding/Traffic-Lights-RL/fremont/osm.sumocfg"):
+    def __init__(self, sumo_config="simulation/osm.sumocfg"):
         # Initialize SUMO
         self.sumoConfig = sumo_config
         self.sumoCmd = ["sumo", "-c", self.sumoConfig]
         self.sumo_running = False  # Initialize the SUMO running flag
+
+        self.producer = kf.create_kafka_producer()
+        self.consumer = kf.create_kafka_consumer('processed-data')
+        kf.create_kafka_topic("sumo-traffic-data")
 
         # Start SUMO to retrieve information on intersections and lighta
         traci.start(self.sumoCmd)
@@ -29,8 +32,8 @@ class SumoGridEnv(gym.Env):
         # Define the action space
         self.action_space = spaces.Box(low=-1.0, high=1.0, shape=(total_traffic_lights,), dtype=np.float32)
 
-        # Define the observation space (queue lengths and traffic light states)
-        total_observation_space_size = num_queue_lengths + total_traffic_lights
+        # Define the observation space (queue lengths, traffic light states, and average vehicle speed at each traffic light)
+        total_observation_space_size = num_queue_lengths + total_traffic_lights + total_traffic_lights
         self.observation_space = spaces.Box(low=np.float32(0), 
                                             high=np.float32(np.inf), 
                                             shape=(total_observation_space_size,), 
@@ -49,8 +52,6 @@ class SumoGridEnv(gym.Env):
         emergency_stop_penalty = -10
         # Check for emergency stops
         reward += emergency_stop_penalty * traci.simulation.getEmergencyStoppingVehiclesNumber()
-        # TODO: Incorporate real-time data insights from Flink, enhancing the learning based on traffic flow optimization.
-        # # Adaptive Reward Function: Modify the reward function to factor in real-time traffic conditions processed by Flink
         return reward
     
     def check_if_done(self):
@@ -67,7 +68,7 @@ class SumoGridEnv(gym.Env):
         else:
             return False
 
-    def step(self, action, producer, consumer):
+    def step(self, action):
         # Ensure SUMO is running
         if not self.sumo_running:
             traci.start(self.sumoCmd)
@@ -100,7 +101,7 @@ class SumoGridEnv(gym.Env):
                 if (tl_dist <= 50):
                     kf.kafka_publish(
                         topic = 'sumo-traffic-data',
-                        producer=producer,
+                        producer=self.producer,
                         value={
                             'veh_id': str(vehicle),
                             'speed': float(speed),
@@ -109,22 +110,25 @@ class SumoGridEnv(gym.Env):
                             'ts': int(time.time())
                         }
                     )
-
-        # Consume processed data from output Kafka topic
-        for tp, messages in consumer.poll().items():
-            for message in messages:
-                tl_id = message.value['tl_id']
-                
-
-        # TODO: Redefine state and state size to include any new dimensions of data received from Flink
-
+        
         # Gather new state information
-        new_queue_lengths = [sum(1 for car_id in traci.lane.getLastStepVehicleIDs(lane_id) if traci.vehicle.getSpeed(car_id) < 4) for lane_id in self.lane_ids]
+        # Initialize a dictionary with a default speed (16 m/s, ~35mph) for each traffic light
+        avg_speeds_per_tl = {tl_id: 16 for tl_id in self.traffic_light_ids}
+        # Consume messages and update the dictionary with actual average speeds
+        for tp, messages in self.consumer.poll().items():
+            for message in messages:
+                if message.value['tl_id'] in avg_speeds_per_tl:
+                    avg_speeds_per_tl[tl_id] = message.value['avg_speed']
+        # Extract the speeds in the order of traffic light IDs
+        new_average_speeds = [avg_speeds_per_tl[tl_id] for tl_id in self.traffic_light_ids]
+        # SUMO defines "waiting time" as when vehicle speed is <= 0.1 m/s
+        new_queue_lengths = [sum(1 for car_id in traci.lane.getLastStepVehicleIDs(lane_id) if traci.vehicle.getSpeed(car_id) <= 0.1) for lane_id in self.lane_ids]
         new_traffic_light_states = [traci.trafficlight.getPhase(light) for light in self.traffic_light_ids]
-        # Combine queue lengths and traffic light states into the new observation
+        # Combine queue lengths, traffic light states, and average vehicle speed at each traffic light into the new observation
         observation = np.concatenate([
             np.array(new_queue_lengths, dtype=np.float32),
-            np.array(new_traffic_light_states, dtype=np.float32)
+            np.array(new_traffic_light_states, dtype=np.float32),
+            np.array(new_average_speeds, dtype=np.float32)
         ])        
         # Calculate the reward
         reward = self.calculate_reward(new_queue_lengths)
@@ -147,13 +151,18 @@ class SumoGridEnv(gym.Env):
         self.traffic_light_ids = traci.trafficlight.getIDList()
         self.lane_ids = traci.lane.getIDList()
 
-        # Generate the initial observation based on the current state of the simulation
-        initial_queue_lengths = [sum(1 for car_id in traci.lane.getLastStepVehicleIDs(lane_id) if traci.vehicle.getSpeed(car_id) < 4) for lane_id in self.lane_ids]
+        # Set initial speed of each vehicle to ~35 mph in m/s
+        for vehicle_id in traci.vehicle.getIDList():
+            traci.vehicle.setSpeed(vehicle_id, 16)
+
+        initial_average_speeds = [16 for _ in self.traffic_light_ids]
+        initial_queue_lengths = [sum(1 for car_id in traci.lane.getLastStepVehicleIDs(lane_id) if traci.vehicle.getSpeed(car_id) <= 0.1) for lane_id in self.lane_ids]
         initial_traffic_light_states = [traci.trafficlight.getPhase(light) for light in self.traffic_light_ids]   
         # Convert the observation components to a NumPy array and concatenate them
         observation = np.concatenate([
             np.array(initial_queue_lengths, dtype=np.float32),
-            np.array(initial_traffic_light_states, dtype=np.float32)
+            np.array(initial_traffic_light_states, dtype=np.float32),
+            np.array(initial_average_speeds, dtype=np.float32)
         ])
         # Return a tuple of the observation and the info dictionary
         return observation, {}

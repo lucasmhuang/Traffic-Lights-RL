@@ -53,8 +53,11 @@ st_env.execute_sql(
 )
 
 # Query: average speed in 4 second intervals
-st_env.from_path("source").window( Slide.over("4.seconds").every("4.seconds").on("rowtime").alias("w") ) \
-    .group_by('w, next_tl').select("AVG(speed) as avg_speed, next_tl as tl") \
-    .where('avg_speed < 3').insert_into("sink")
+st_env.from_path("source") \
+    .window(Slide.over("4.seconds").every("4.seconds").on("rowtime").alias("w")) \
+    .group_by('w, next_tl') \
+    .select("AVG(speed) as avg_speed, next_tl as tl_id") \
+    .filter("tl_id is not null") \
+    .insert_into("sink")
 
 st_env.execute("PyFlink job")

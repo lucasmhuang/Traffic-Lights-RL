@@ -113,7 +113,7 @@ def federated_averaging(models):
     return state_dict
     
 class KafkaFunctions:
-    def create_kafka_topic(self, topicName):
+    def create_kafka_topic(topicName):
         try:
             admin_client = KafkaAdminClient( bootstrap_servers="localhost:9091", client_id='cl1')
             topic_list = [NewTopic(name=topicName, num_partitions=1, replication_factor=1)]
@@ -122,7 +122,7 @@ class KafkaFunctions:
         except Exception as e:
             print('Exception', str(e), 'in creating topic', topicName)
 
-    def create_kafka_producer(self):
+    def create_kafka_producer():
         producer = None
         try:
             producer = KafkaProducer(
@@ -135,7 +135,7 @@ class KafkaFunctions:
         finally:
             return producer
 
-    def create_kafka_consumer(self, topic):
+    def create_kafka_consumer(topic):
         consumer = None
         try:
             consumer = KafkaConsumer(topic,
@@ -150,11 +150,8 @@ class KafkaFunctions:
         finally:
             return consumer
 
-    def kafka_publish(self, topic, value, producer):
+    def kafka_publish(topic, value, producer):
         try:
             producer.send(topic, value=value)
         except Exception as e:
             print('Exception', str(e), 'in publishing', topic)
-
-    def create_kafka_connection(self):
-        self.create_kafka_topic("sumo-traffic-data")
