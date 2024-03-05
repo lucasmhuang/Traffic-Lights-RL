@@ -3,6 +3,7 @@ import torch
 from stable_baselines3 import DDPG
 import numpy as np
 from model import Actor, Critic, ReplayBuffer, Agent, OrnsteinUhlenbeckActionNoise, soft_update, federated_averaging
+from model import KafkaFunctions as kf
 
 # Register environment with Gym
 gym.register(
@@ -34,6 +35,10 @@ for tl_id in env.unwrapped.traffic_light_ids:
     critic_optimizer = torch.optim.Adam(local_critic.parameters(), lr=1e-4)
     agents.append(Agent(tl_id, local_actor, local_critic, target_actor, target_critic, actor_optimizer, critic_optimizer, ReplayBuffer(buffer_size=500000, batch_size=64)))
 
+kf.create_kafka_topic("sumo-traffic-data")
+producer = kf.create_kafka_producer()
+consumer = kf.create_kafka_consumer('processed_data')
+
 # Main federated learning loop
 mse_loss = torch.nn.MSELoss()
 n_actions = env.action_space.shape[0]
@@ -53,7 +58,7 @@ for iteration in range(num_episodes):
         actions = []
         for i, agent in enumerate(agents):
             actions.append(np.clip(agent.get_action(state)  + ou_noises[i](), env.action_space.low[i], env.action_space.high[i]))
-        new_state, reward, done, truncated, _ = env.step(actions)
+        new_state, reward, done, truncated, _ = env.step(actions, producer, consumer)
         episode_reward += reward
         for i, agent in enumerate(agents):
             agent.replay_buffer.add(state, actions[i], reward, new_state, done)
@@ -71,14 +76,12 @@ for iteration in range(num_episodes):
                 agent.critic_optimizer.zero_grad()
                 critic_loss.backward()
                 agent.critic_optimizer.step()
-
                 # Update Actor
                 # Calculate actor loss
                 actor_loss = -agent.critic(states, agent.actor(states)).mean()
                 agent.actor_optimizer.zero_grad()
                 actor_loss.backward()
                 agent.actor_optimizer.step()
-
                 # Soft update target networks
                 soft_update(agent.actor, agent.target_actor)
                 soft_update(agent.critic, agent.target_critic) 
@@ -92,6 +95,7 @@ for iteration in range(num_episodes):
     global_actor.load_state_dict(global_actor_state_dict)
     global_critic.load_state_dict(global_critic_state_dict)
     # Propagate global model weights back to the agents
+    # TODO: Use Flink to distribute weights
     for agent in agents:
         agent.target_actor.load_state_dict(global_actor_state_dict)
         agent.target_critic.load_state_dict(global_critic_state_dict)
@@ -104,27 +108,27 @@ torch.save(global_actor.state_dict(), 'global_actor_model.pth')
 # Save the global critic model
 torch.save(global_critic.state_dict(), 'global_critic_model.pth')
 
-# Generic DDPG model
-# Create the action noise for exploration
-n_actions = env.action_space.shape[-1]
-action_noise = OrnsteinUhlenbeckActionNoise(mu=np.zeros(n_actions), sigma=0.3 * np.ones(n_actions))
-model = DDPG("MlpPolicy", env, action_noise=action_noise, verbose=1)
-# Train the model
-model.learn(total_timesteps=1000)
-# Evaluate the model
-evaluate_episodes = 10
-total_rewards = 0
-for episode in range(evaluate_episodes):
-    obs, info = env.reset()
-    done = False
-    episode_reward = 0
-    while not done:
-        action, _states = model.predict(obs, deterministic=True)
-        obs, reward, done, truncated, info = env.step(action)
-        episode_reward += reward
-    total_rewards += episode_reward
-average_reward = total_rewards / evaluate_episodes
-print("Average Reward:", average_reward)
+# # Generic DDPG model
+# # Create the action noise for exploration
+# n_actions = env.action_space.shape[-1]
+# action_noise = OrnsteinUhlenbeckActionNoise(mu=np.zeros(n_actions), sigma=0.3 * np.ones(n_actions))
+# model = DDPG("MlpPolicy", env, action_noise=action_noise, verbose=1)
+# # Train the model
+# model.learn(total_timesteps=1000)
+# # Evaluate the model
+# evaluate_episodes = 10
+# total_rewards = 0
+# for episode in range(evaluate_episodes):
+#     obs, info = env.reset()
+#     done = False
+#     episode_reward = 0
+#     while not done:
+#         action, _states = model.predict(obs, deterministic=True)
+#         obs, reward, done, truncated, info = env.step(action)
+#         episode_reward += reward
+#     total_rewards += episode_reward
+# average_reward = total_rewards / evaluate_episodes
+# print("Average Reward:", average_reward)
 
 # # My model
 # actor_model = Actor(state_size, action_size)

@@ -158,4 +158,3 @@ class KafkaFunctions:
 
     def create_kafka_connection(self):
         self.create_kafka_topic("sumo-traffic-data")
-        self.create_kafka_topic("edges")

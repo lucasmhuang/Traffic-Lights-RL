@@ -2,6 +2,9 @@ import gymnasium as gym
 from gymnasium import spaces
 import traci # SUMO's Traffic Control Interface
 import numpy as np
+import time
+from kafka import KafkaConsumer, KafkaProducer
+from model import KafkaFunctions as kf
 
 class SumoGridEnv(gym.Env):
     def __init__(self, sumo_config="C:/Users/lucas/Documents/Coding/Traffic-Lights-RL/fremont/osm.sumocfg"):
@@ -46,6 +49,8 @@ class SumoGridEnv(gym.Env):
         emergency_stop_penalty = -10
         # Check for emergency stops
         reward += emergency_stop_penalty * traci.simulation.getEmergencyStoppingVehiclesNumber()
+        # TODO: Incorporate real-time data insights from Flink, enhancing the learning based on traffic flow optimization.
+        # # Adaptive Reward Function: Modify the reward function to factor in real-time traffic conditions processed by Flink
         return reward
     
     def check_if_done(self):
@@ -62,7 +67,7 @@ class SumoGridEnv(gym.Env):
         else:
             return False
 
-    def step(self, action):
+    def step(self, action, producer, consumer):
         # Ensure SUMO is running
         if not self.sumo_running:
             traci.start(self.sumoCmd)
@@ -85,6 +90,34 @@ class SumoGridEnv(gym.Env):
         # Advance the SUMO simulation by one step
         traci.simulationStep()
 
+        # Publish vehicle data to a Kafka topic
+        for vehicle in traci.vehicle.getIDList():
+            speed = traci.vehicle.getSpeed(vehicle)
+            # Returns list of upcoming traffic lights [(tlsID, tlsIndex, distance, state), ...]
+            next_tls = traci.vehicle.getNextTLS(vehicle)
+            if len(next_tls) > 0:
+                tl_id, tl_dist, tl_state = next_tls[0][0], next_tls[0][2], next_tls[0][-1]
+                if (tl_dist <= 50):
+                    kf.kafka_publish(
+                        topic = 'sumo-traffic-data',
+                        producer=producer,
+                        value={
+                            'veh_id': str(vehicle),
+                            'speed': float(speed),
+                            'next_tl': str(tl_id),
+                            'next_tl_state': str(tl_state),
+                            'ts': int(time.time())
+                        }
+                    )
+
+        # Consume processed data from output Kafka topic
+        for tp, messages in consumer.poll().items():
+            for message in messages:
+                tl_id = message.value['tl_id']
+                
+
+        # TODO: Redefine state and state size to include any new dimensions of data received from Flink
+
         # Gather new state information
         new_queue_lengths = [sum(1 for car_id in traci.lane.getLastStepVehicleIDs(lane_id) if traci.vehicle.getSpeed(car_id) < 4) for lane_id in self.lane_ids]
         new_traffic_light_states = [traci.trafficlight.getPhase(light) for light in self.traffic_light_ids]
@@ -97,10 +130,7 @@ class SumoGridEnv(gym.Env):
         reward = self.calculate_reward(new_queue_lengths)
         # Check if the episode is done
         done = self.check_if_done()
-        # For truncated, you might need additional logic depending on your environment
-        # For example, if you have a maximum number of steps:
-        max_steps = 1000
-        truncated = self.current_step >= max_steps
+        truncated = self.current_step >= 1000
         # Increment the step counter
         self.current_step += 1
 

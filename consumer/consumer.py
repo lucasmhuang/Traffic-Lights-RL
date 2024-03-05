@@ -14,7 +14,6 @@ st_env = StreamTableEnvironment.create(env, env_settings)
 st_env.execute_sql(
     f"""
     CREATE TABLE source (
-        step FLOAT,
         veh_id STRING,
         speed FLOAT,
         next_tl STRING,
@@ -24,7 +23,7 @@ st_env.execute_sql(
         WATERMARK FOR rowtime AS rowtime - INTERVAL '2' SECOND
     ) WITH (
         'connector' = 'kafka-0.11',
-        'topic' = '{os.environ["KAFKA_TOPIC"]}',
+        'topic' = 'sumo-traffic-data',
         'scan.startup.mode' = 'latest-offset',
         'properties.bootstrap.servers' = '{os.environ["KAFKA_HOST"]}',
         'properties.zookeeper.connect' = '{os.environ["ZOOKEEPER_HOST"]}',
@@ -33,6 +32,7 @@ st_env.execute_sql(
     )
     """
 )
+
 tbl = st_env.from_path('source')
 print('\nSource Schema')
 tbl.print_schema()
@@ -41,11 +41,11 @@ tbl.print_schema()
 st_env.execute_sql(
     f"""
     CREATE TABLE sink (
-        avg_speed FLOAT,
+        avg_speed FLOAT,s
         tl_id STRING       
     ) WITH (
         'connector' = 'kafka-0.11',
-        'topic' = 'output',
+        'topic' = 'processed-data',
         'properties.bootstrap.servers' = '{os.environ["KAFKA_HOST"]}',
         'format' = 'json'
     )
